@@ -5,20 +5,18 @@ import torch
 from datasets.audio import save_wavernn_wav
 from infolog import log
 from tqdm import tqdm
-from wavernn.model import Model
-from wavernn.train import _bits, _pad
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+from wavernn.model import WaveRNN
 
 
 def synthesize(args, input_dir, output_dir, checkpoint_path, hparams):
+    # device
+    device = torch.device('cuda' if args.use_cuda else 'cpu')
+
     # Initialize Model
-    model = Model(rnn_dims=512, fc_dims=512, bits=_bits, pad=_pad,
-                  upsample_factors=(5, 5, 11), feat_dims=80,
-                  compute_dims=128, res_out_dims=128, res_blocks=10).to(device)
+    model = WaveRNN(hparams.wavernn_bits, hparams.hop_size, hparams.num_mels, device).to(device)
 
     # Load Model
-    if torch.cuda.is_available():
+    if args.use_cuda:
         checkpoint = torch.load(checkpoint_path)
     else:
         checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)

@@ -105,8 +105,8 @@ def main():
     parser.add_argument('--hparams', default='', help='Hyperparameter overrides as a comma-separated list of name=value pairs')
     parser.add_argument('--model', default='Tacotron-2')
     parser.add_argument('--mode', default='synthesis', help='mode for synthesis of tacotron after training')
-    parser.add_argument('--GTA', type=bool, default=True, help='Ground truth aligned synthesis, defaults to True, only considered in Tacotron synthesis mode')
-    parser.add_argument('--restore', type=bool, default=True, help='Set this to False to do a fresh training')
+    parser.add_argument('--GTA', action='store_true', help='Ground truth aligned synthesis, defaults to True, only considered in Tacotron synthesis mode')
+    parser.add_argument('--init', action='store_true', help='Set this to do a fresh training')
     parser.add_argument('--summary_interval', type=int, default=250, help='Steps between running summary ops')
     parser.add_argument('--checkpoint_interval', type=int, default=5000, help='Steps between writing checkpoints')
     parser.add_argument('--eval_interval', type=int, default=10000, help='Steps between eval on test data')
@@ -114,6 +114,7 @@ def main():
     parser.add_argument('--wavernn_train_epochs', type=int, default=300, help='total number of wavenet training epochs')
     parser.add_argument('--text_list', default='', help='Text file contains list of texts to be synthesized. Valid if mode=eval')
     parser.add_argument('--slack_url', default=None, help='slack webhook notification destination link')
+    parser.add_argument('--use_cuda', action='store_true')
     args = parser.parse_args()
 
     accepted_models = ['Tacotron', 'WaveRNN', 'Tacotron-2']

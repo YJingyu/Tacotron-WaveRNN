@@ -154,7 +154,7 @@ def train(args, log_dir, input_path, hparams):
             sess.run(tf.global_variables_initializer())
 
             # saved model restoring
-            if args.restore:
+            if not args.init:
                 # Restore saved model if the user requested it, default = True
                 try:
                     checkpoint_state = tf.train.get_checkpoint_state(save_dir)

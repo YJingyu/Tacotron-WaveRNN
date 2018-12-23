@@ -11,16 +11,7 @@ from infolog import log
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from wavernn.model import Model
-
-_batch_size = 32
-_bits = 9
-_pad = 2
-_hop_len = 275
-_seq_len = _hop_len * 5
-_mel_win = _seq_len // _hop_len + 2 * _pad
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+from wavernn.model import WaveRNN
 
 
 class AudiobookDataset(Dataset):
@@ -38,23 +29,32 @@ class AudiobookDataset(Dataset):
         return len(self.ids)
 
 
-def collate(batch):
-    mels = []
-    coarse = []
-    for x in batch:
-        max_offset = x[0].shape[-1] - (_mel_win + 2 * _pad)
-        mel_offset = np.random.randint(0, max_offset)
-        sig_offset = (mel_offset + _pad) * _hop_len
-        mels.append(x[0][:, mel_offset:(mel_offset + _mel_win)])
-        coarse.append(x[1][sig_offset:(sig_offset + _seq_len + 1)])
+class CustomCollator():
+    def __init__(self, hparams):
+        self.bits = hparams.wavernn_bits
+        self.pad = hparams.wavernn_pad
+        self.hop_size = hparams.hop_size
 
-    mels = torch.FloatTensor(np.stack(mels).astype(np.float32))
-    coarse = torch.LongTensor(np.stack(coarse).astype(np.int64))
+    def __call__(self, batch):
+        mel_win = 5 + 2 * self.pad
+        seq_len = self.hop_size * mel_win
 
-    x_input = 2 * coarse[:, :_seq_len].float() / (2**_bits - 1.) - 1.
-    y_coarse = coarse[:, 1:]
+        mels = []
+        coarse = []
+        for x in batch:
+            max_offset = x[0].shape[-1] - mel_win
+            mel_offset = np.random.randint(0, max_offset)
+            sig_offset = mel_offset * self.hop_size
+            mels.append(x[0][:, mel_offset:(mel_offset + mel_win)])
+            coarse.append(x[1][sig_offset:(sig_offset + seq_len + 1)])
 
-    return x_input, mels, y_coarse
+        mels = torch.FloatTensor(np.stack(mels).astype(np.float32))
+        coarse = torch.LongTensor(np.stack(coarse).astype(np.int64))
+
+        x_input = 2 * coarse[:, :seq_len].float() / (2**self.bits - 1.) - 1.
+        y_coarse = coarse[:, 1:]
+
+        return x_input, mels, y_coarse
 
 
 def test_generate(model, step, input_dir, ouput_dir, sr, samples=3):
@@ -79,16 +79,19 @@ def train(args, log_dir, input_dir, hparams):
     log('Using model: {}'.format(args.model))
     log(hparams_debug_string())
 
+    # device
+    device = torch.device('cuda' if args.use_cuda else 'cpu')
+
     # Load Dataset
     with open(f'{input_dir}/dataset_ids.pkl', 'rb') as f:
         dataset = AudiobookDataset(pickle.load(f), input_dir)
 
-    data_loader = DataLoader(dataset, collate_fn=collate, batch_size=_batch_size, shuffle=True, pin_memory=True)
+    collate = CustomCollator(hparams)
+    batch_size = hparams.wavernn_batch_size * hparams.wavernn_gpu_num
+    data_loader = DataLoader(dataset, collate_fn=collate, batch_size=batch_size, shuffle=True, pin_memory=args.use_cuda)
 
     # Initialize Model
-    model = Model(rnn_dims=512, fc_dims=512, bits=_bits, pad=_pad,
-                  upsample_factors=(5, 5, 11), feat_dims=80,
-                  compute_dims=128, res_out_dims=128, res_blocks=10).to(device)
+    model = WaveRNN(hparams.wavernn_bits, hparams.hop_size, hparams.num_mels, device).to(device)
 
     # Load Model
     if not os.path.exists(checkpoint_path):
@@ -98,17 +101,20 @@ def train(args, log_dir, input_dir, hparams):
         log('Loading model from {}'.format(checkpoint_path), slack=True)
 
     # Load Parameters
-    if torch.cuda.is_available():
+    if args.use_cuda:
         checkpoint = torch.load(checkpoint_path)
     else:
         checkpoint = torch.load(checkpoint_path, map_location=lambda storage, loc: storage)
 
     model.load_state_dict(checkpoint['state_dict'])
 
+    if args.use_cuda:
+        model = nn.DataParallel(model).to(device)
+
     step = checkpoint['global_step']
     log('Starting from {} step'.format(step), slack=True)
 
-    optimiser = optim.Adam(model.parameters(), lr=1e-4)
+    optimiser = optim.Adam(model.parameters(), lr=hparams.wavernn_lr_rate)
     criterion = nn.NLLLoss().to(device)
 
     # Train
@@ -117,30 +123,34 @@ def train(args, log_dir, input_dir, hparams):
         start = time.time()
 
         for i, (x, m, y) in enumerate(data_loader):
-            x, m, y = x.to(device), m.to(device), y.to(device).unsqueeze(-1)
-            y_hat = model(x, m).transpose(1, 2).unsqueeze(-1)
+            x, m, y = x.to(device), m.to(device), y.to(device)
 
-            loss = criterion(y_hat, y)
+            y_hat = model(x, m).transpose(1, 2)
+
+            loss = criterion(y_hat.unsqueeze(-1), y.unsqueeze(-1))
 
             optimiser.zero_grad()
             loss.backward()
             optimiser.step()
 
-            item_loss = loss.item()
-            running_loss += item_loss
+            running_loss += loss.item()
             avg_loss = running_loss / (i + 1)
 
             step += 1
             speed = (i + 1) / (time.time() - start)
 
-            message = 'Step {:7d} [{:.3f} sec/step, loss={:.5f}, avg_loss={:.5f}]'.format(step, speed, item_loss, avg_loss)
-            log(message, end='\r')
+            log('Step {:7d} [{:.3f} step/sec, avg_loss={:.5f}]'.format(step, speed, avg_loss), end='\r')
 
         # Save Checkpoint and Eval Wave
         if (e + 1) % 30 == 0:
             log('\nSaving model at step {}'.format(step), end='', slack=True)
-            torch.save({'state_dict': model.state_dict(), 'global_step': step}, checkpoint_path)
-            test_generate(model, step, test_dir, eval_wav_dir, hparams.sample_rate)
+
+            if args.use_cuda:
+                torch.save({'state_dict': model.module.state_dict(), 'global_step': step}, checkpoint_path)
+                test_generate(model.module, step, test_dir, eval_wav_dir, hparams.sample_rate)
+            else:
+                torch.save({'state_dict': model.state_dict(), 'global_step': step}, checkpoint_path)
+                test_generate(model, step, test_dir, eval_wav_dir, hparams.sample_rate)
 
         log('\nFinished {} epoch. Starting next epoch...'.format(e + 1))
 

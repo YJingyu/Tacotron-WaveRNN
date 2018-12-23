@@ -4,7 +4,6 @@ import pickle
 
 import numpy as np
 from infolog import log
-from wavernn.train import _bits
 
 
 def get_files(path, extension='.npy'):
@@ -14,9 +13,9 @@ def get_files(path, extension='.npy'):
     return sorted(filenames)
 
 
-def convert_gta_audio(audio_path):
+def convert_gta_audio(audio_path, bits):
     audio = np.load(audio_path)
-    quant = (audio + 1.) * (2**_bits - 1) / 2
+    quant = (audio + 1.) * (2**bits - 1) / 2
     return quant.astype(np.int)
 
 
@@ -46,8 +45,8 @@ def preprocess(args, audio_dir, taco_dir, hparams):
 
         dataset_ids.append(audio_id)
 
-        np.save(f'{quant_dir}/{audio_id}.npy', convert_gta_audio(path[0]))
-        np.save(f'{mels_dir}/{mels_id}.npy', convert_gta_mels(path[1]))
+        np.save(f'{quant_dir}/{audio_id}.npy', convert_gta_audio(path[0], hparams.wavernn_bits))
+        np.save(f'{mels_dir}/{mels_id}.npy', convert_gta_mels(path[1], hparams.wavernn_bits))
 
         log('%i/%i : audio: %s mel: %s' % (i + 1, len(audio_files), audio_id, mels_id))
 

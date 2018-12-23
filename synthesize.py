@@ -54,9 +54,10 @@ def main():
     parser.add_argument('--hparams', default='', help='Hyperparameter overrides as a comma-separated list of name=value pairs')
     parser.add_argument('--model', default='Tacotron-2')
     parser.add_argument('--mode', default='eval', help='mode of run: can be one of {}'.format(accepted_modes))
-    parser.add_argument('--GTA', type=bool, default=True, help='Ground truth aligned synthesis, defaults to True, only considered in synthesis mode')
+    parser.add_argument('--GTA', action='store_true', help='Ground truth aligned synthesis, defaults to True, only considered in synthesis mode')
     parser.add_argument('--text_list', default='', help='Text file contains list of texts to be synthesized. Valid if mode=eval')
     parser.add_argument('--speaker_id', default=None, help='Defines the speakers ids to use when running standalone Wavenet on a folder of mels. this variable must be a comma-separated list of ids')
+    parser.add_argument('--use_cuda', action='store_true')
     args = parser.parse_args()
 
     accepted_models = ['Tacotron', 'WaveRNN', 'Tacotron-2']
